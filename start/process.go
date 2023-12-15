@@ -3,6 +3,7 @@ package start
 import (
 	"fmt"
 	"io"
+	"math"
 	"syscall"
 	"time"
 
@@ -11,6 +12,8 @@ import (
 
 const runningCheckInterval = 100 * time.Millisecond
 
+const interruptableSleepCheckInterval = 50 * time.Millisecond
+
 const SIGINFO syscall.Signal = 29
 
 type process struct {
@@ -18,14 +21,15 @@ type process struct {
 
 	pid int
 
-	stopSignal   syscall.Signal
-	canDie       bool
-	canDieNow    bool
-	autoRestart  bool
-	keepingAlive bool
-	dead         bool
-	interrupted  bool
-	restart      bool
+	stopSignal          syscall.Signal
+	canDie              bool
+	canDieNow           bool
+	autoRestart         bool
+	autoRestartInterval time.Duration
+	keepingAlive        bool
+	dead                bool
+	interrupted         bool
+	restart             bool
 
 	tmux *tmuxClient
 
@@ -37,17 +41,18 @@ type process struct {
 	Command string
 }
 
-func newProcess(tmux *tmuxClient, name string, color int, command string, output *multiOutput, canDie bool, autoRestart bool, stopSignal syscall.Signal) *process {
+func newProcess(tmux *tmuxClient, name string, color int, command string, output *multiOutput, canDie bool, autoRestart bool, autoRestartInterval time.Duration, stopSignal syscall.Signal) *process {
 	out, in := io.Pipe()
 
 	proc := &process{
 		output: output,
 		tmux:   tmux,
 
-		stopSignal:  stopSignal,
-		canDie:      canDie,
-		canDieNow:   canDie,
-		autoRestart: autoRestart,
+		stopSignal:          stopSignal,
+		canDie:              canDie,
+		canDieNow:           canDie,
+		autoRestart:         autoRestart,
+		autoRestartInterval: autoRestartInterval,
 
 		in:  in,
 		out: out,
@@ -167,6 +172,24 @@ func (p *process) scanOuput() {
 	}
 }
 
+func (p *process) interruptableSleep(sleepDuration time.Duration) bool {
+	ticker2 := time.NewTicker(interruptableSleepCheckInterval)
+	totalTicks := int(math.Ceil(sleepDuration.Seconds() / interruptableSleepCheckInterval.Seconds()))
+	defer ticker2.Stop()
+	ticksPassed := 0
+	for range ticker2.C {
+		ticksPassed += 1
+		if p.interrupted {
+			p.output.WriteBoldLinef(p, "Interrupted while waiting for process restart")
+			return true
+		}
+		if ticksPassed >= totalTicks {
+			return false
+		}
+	}
+	return false
+}
+
 func (p *process) observe() {
 	ticker := time.NewTicker(runningCheckInterval)
 	defer ticker.Stop()
@@ -184,6 +207,14 @@ func (p *process) observe() {
 				p.pid = 0
 
 				if p.restart || (!p.interrupted && p.autoRestart) {
+					if p.autoRestartInterval > 0 {
+						p.output.WriteBoldLinef(p, "Restarting in %v seconds...", p.autoRestartInterval.Seconds())
+						interrupted := p.interruptableSleep(p.autoRestartInterval)
+						if interrupted {
+							p.dead = true
+							break
+						}
+					}
 					p.respawn()
 				} else {
 					p.dead = true

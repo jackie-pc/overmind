@@ -76,6 +76,7 @@ func newCommand(h *Handler) (*command, error) {
 
 	canDie := utils.SplitAndTrim(h.CanDie)
 	autoRestart := utils.SplitAndTrim(h.AutoRestart)
+	autoRestartInterval := h.AutoRestartInterval
 
 	c.scriptDir = filepath.Join(os.TempDir(), instanceID)
 	os.MkdirAll(c.scriptDir, 0700)
@@ -95,6 +96,7 @@ func newCommand(h *Handler) (*command, error) {
 				c.output,
 				(h.AnyCanDie || utils.StringsContain(canDie, e.OrigName)),
 				(utils.StringsContain(autoRestart, e.OrigName) || utils.StringsContain(autoRestart, "all")),
+				autoRestartInterval,
 				e.StopSignal,
 			))
 		}
